@@ -1,0 +1,5 @@
+**/.idea/
+**.pyc
+**/saved_models/
+**/*.py~
+

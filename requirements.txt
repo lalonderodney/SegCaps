@@ -1,0 +1,10 @@
+numpy
+scipy
+matplotlib
+tqdm
+scikit-learn
+scikit-image
+pillow
+SimpleITK
+tensorflow-gpu
+keras
