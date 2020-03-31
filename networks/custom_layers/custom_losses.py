@@ -112,10 +112,10 @@ def dice_loss(y_true, y_pred, from_logits=False):
 
 def weighted_binary_crossentropy_loss(pos_weight):
     # pos_weight: A coefficient to use on the positive examples.
-    def weighted_binary_crossentropy(target, output, from_logits=False):
+    def weighted_binary_crossentropy(labels, output, from_logits=False):
         """Binary crossentropy between an output tensor and a target tensor.
         # Arguments
-            target: A tensor with the same shape as `output`.
+            labels: A tensor with the same shape as `output`.
             output: A tensor.
             from_logits: Whether `output` is expected to be a logits tensor.
                 By default, we consider that `output`
@@ -129,10 +129,10 @@ def weighted_binary_crossentropy_loss(pos_weight):
             # transform back to logits
             _epsilon = tf.convert_to_tensor(1e-7, output.dtype.base_dtype)
             output = tf.clip_by_value(output, _epsilon, 1 - _epsilon)
-            output = tf.log(output / (1 - output))
+            output = tf.math.log(output / (1 - output))
 
-        return tf.nn.weighted_cross_entropy_with_logits(targets=target,
-                                                       logits=output,
+        return tf.nn.weighted_cross_entropy_with_logits(labels=labels,
+                                                        logits=output,
                                                         pos_weight=pos_weight)
     return weighted_binary_crossentropy
 

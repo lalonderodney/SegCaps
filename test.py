@@ -8,14 +8,14 @@ If you have any questions, please email me at lalonde@knights.ucf.edu.
 This file is used for testing models. Please see the README for details about testing.
 '''
 
-from __future__ import print_function
+from __future__ import print_function, division
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 plt.ioff()
 
-from os.path import join
+from os.path import join, basename
 from os import makedirs
 import csv
 import SimpleITK as sitk
@@ -23,13 +23,12 @@ from tqdm import tqdm
 import numpy as np
 import scipy.ndimage.morphology
 from skimage import measure, filters
-from metrics import dc, jc, assd
+from utils.metrics import dc, jc, assd, hd
 
 from keras import backend as K
 K.set_image_data_format('channels_last')
-from keras.utils import print_summary
 
-from load_3D_data import generate_test_batches
+from utils.load_3D_data import generate_test_batches
 
 
 def threshold_mask(raw_output, threshold):
@@ -64,12 +63,31 @@ def threshold_mask(raw_output, threshold):
 
 
 def test(args, test_list, model_list, net_input_shape):
-    if args.weights_path == '':
-        weights_path = join(args.check_dir, args.output_name + '_model_' + args.time + '.hdf5')
+    if len(model_list) > 1:
+        eval_model = model_list[1]
     else:
-        weights_path = join(args.data_root_dir, args.weights_path)
+        eval_model = model_list[0]
 
-    output_dir = join(args.data_root_dir, 'results', args.net, 'split_' + str(args.split_num))
+    out_net_name = args.net
+    if args.net.find('caps') != -1 and args.net != 'segcapsbasic':
+        out_net_name = out_net_name + 'r{}r{}'.format(args.r1, args.r2)
+
+    if args.weights_path != '':
+        output_dir = join(args.data_root_dir, 'results', out_net_name, 'split_{}'.format(args.split_num),
+                          basename(args.weights_path)[-24:-5])
+        try:
+            eval_model.load_weights(args.weights_path)
+        except Exception as e:
+            print(e)
+            raise Exception('Failed to load weights from training.')
+    else:
+        output_dir = join(args.data_root_dir, 'results', out_net_name, 'split_{}'.format(args.split_num), args.time)
+        try:
+            eval_model.load_weights(join(args.check_dir, args.output_name + '_model_' + args.time + '.hdf5'))
+        except Exception as e:
+            print(e)
+            raise Exception('Failed to load weights from training.')
+
     raw_out_dir = join(output_dir, 'raw_output')
     fin_out_dir = join(output_dir, 'final_output')
     fig_out_dir = join(output_dir, 'qual_figs')
@@ -86,16 +104,6 @@ def test(args, test_list, model_list, net_input_shape):
     except:
         pass
 
-    if len(model_list) > 1:
-        eval_model = model_list[1]
-    else:
-        eval_model = model_list[0]
-    try:
-        eval_model.load_weights(weights_path)
-    except:
-        print('Unable to find weights path. Testing with random weights.')
-    print_summary(model=eval_model, positions=[.38, .65, .75, 1.])
-
     # Set up placeholders
     outfile = ''
     if args.compute_dice:
@@ -107,11 +115,14 @@ def test(args, test_list, model_list, net_input_shape):
     if args.compute_assd:
         assd_arr = np.zeros((len(test_list)))
         outfile += 'assd_'
+    if args.compute_hd:
+        hd_arr = np.zeros((len(test_list)))
+        outfile += 'hd_'
 
     # Testing the network
     print('Testing... This will take some time...')
 
-    with open(join(output_dir, args.save_prefix + outfile + 'scores.csv'), 'wb') as csvfile:
+    with open(join(output_dir, args.save_prefix + outfile + 'scores.csv'), 'w') as csvfile:
         writer = csv.writer(csvfile, delimiter=',', quotechar='|', quoting=csv.QUOTE_MINIMAL)
 
         row = ['Scan Name']
@@ -121,12 +132,18 @@ def test(args, test_list, model_list, net_input_shape):
             row.append('Jaccard Index')
         if args.compute_assd:
             row.append('Average Symmetric Surface Distance')
+        if args.compute_hd:
+            row.append('Hausdorff Distance')
 
         writer.writerow(row)
 
         for i, img in enumerate(tqdm(test_list)):
             sitk_img = sitk.ReadImage(join(args.data_root_dir, 'imgs', img[0]))
             img_data = sitk.GetArrayFromImage(sitk_img)
+            temp1 = img[0].split('.')
+            img_name = temp1[0]
+            img_ext = '.'.join(temp1[1:])
+
             num_slices = img_data.shape[0]
 
             output_array = eval_model.predict_generator(generate_test_batches(args.data_root_dir, [img],
@@ -141,8 +158,23 @@ def test(args, test_list, model_list, net_input_shape):
             if args.net.find('caps') != -1:
                 output = output_array[0][:,:,:,0]
                 #recon = output_array[1][:,:,:,0]
+            elif args.net.find('phnn') != -1:
+                output = output_array[-1][:, :, :, 0]
             else:
                 output = output_array[:,:,:,0]
+
+            h_pad = int(np.ceil(img_data.shape[1] / 2 ** 5)) * (2 ** 5) - img_data.shape[1]
+            w_pad = int(np.ceil(img_data.shape[2] / 2 ** 5)) * (2 ** 5) - img_data.shape[2]
+
+            if h_pad == 1:
+                output = output[:, 1:, :]
+            elif h_pad > 1:
+                output = output[:, int(np.ceil(h_pad / 2.)):-int(np.floor(h_pad / 2.)), :]
+
+            if w_pad == 1:
+                output = output[:, :,1:]
+            elif w_pad > 1:
+                output = output[:, :, int(np.ceil(w_pad / 2.)):-int(np.floor(w_pad / 2.))]
 
             output_img = sitk.GetImageFromArray(output)
             print('Segmenting Output')
@@ -153,8 +185,10 @@ def test(args, test_list, model_list, net_input_shape):
             output_mask.CopyInformation(sitk_img)
 
             print('Saving Output')
-            sitk.WriteImage(output_img, join(raw_out_dir, img[0][:-4] + '_raw_output' + img[0][-4:]))
-            sitk.WriteImage(output_mask, join(fin_out_dir, img[0][:-4] + '_final_output' + img[0][-4:]))
+            if args.save_raw:
+                sitk.WriteImage(output_img, join(raw_out_dir, img_name + '_raw_output.' + img_ext))
+            if args.save_seg:
+                sitk.WriteImage(output_mask, join(fin_out_dir, img_name + '_final_output.' + img_ext))
 
             # Load gt mask
             sitk_mask = sitk.ReadImage(join(args.data_root_dir, 'masks', img[0]))
@@ -186,38 +220,57 @@ def test(args, test_list, model_list, net_input_shape):
             ax[2].axis('off')
 
             fig = plt.gcf()
-            fig.suptitle(img[0][:-4])
+            fig.suptitle(img_name)
 
-            plt.savefig(join(fig_out_dir, img[0][:-4] + '_qual_fig' + '.png'),
+            plt.savefig(join(fig_out_dir, img_name + '_qual_fig' + '.png'),
                         format='png', bbox_inches='tight')
             plt.close('all')
 
-            row = [img[0][:-4]]
+            row = [img_name]
             if args.compute_dice:
                 print('Computing Dice')
-                dice_arr[i] = dc(output_bin, gt_data)
+                try:
+                    dice_arr[i] = dc(output_bin, gt_data)
+                except:
+                    dice_arr[i] = 0
                 print('\tDice: {}'.format(dice_arr[i]))
                 row.append(dice_arr[i])
             if args.compute_jaccard:
                 print('Computing Jaccard')
-                jacc_arr[i] = jc(output_bin, gt_data)
+                try:
+                    jacc_arr[i] = jc(output_bin, gt_data)
+                except:
+                    jacc_arr[i] = 0
                 print('\tJaccard: {}'.format(jacc_arr[i]))
                 row.append(jacc_arr[i])
             if args.compute_assd:
                 print('Computing ASSD')
-                assd_arr[i] = assd(output_bin, gt_data, voxelspacing=sitk_img.GetSpacing(), connectivity=1)
+                try:
+                    assd_arr[i] = assd(output_bin, gt_data, voxelspacing=sitk_img.GetSpacing(), connectivity=1)
+                except:
+                    assd_arr[i] = np.nan
                 print('\tASSD: {}'.format(assd_arr[i]))
                 row.append(assd_arr[i])
+            if args.compute_hd:
+                print('Computing HD')
+                try:
+                    hd_arr[i] = hd(output_bin, gt_data, voxelspacing=sitk_img.GetSpacing(), connectivity=1)
+                except:
+                    hd_arr[i] = np.nan
+                print('\tHD: {}'.format(hd_arr[i]))
+                row.append(hd_arr[i])
 
             writer.writerow(row)
 
         row = ['Average Scores']
         if args.compute_dice:
-            row.append(np.mean(dice_arr))
+            row.append(np.nanmean(dice_arr))
         if args.compute_jaccard:
-            row.append(np.mean(jacc_arr))
+            row.append(np.nanmean(jacc_arr))
         if args.compute_assd:
-            row.append(np.mean(assd_arr))
+            row.append(np.nanmean(assd_arr))
+        if args.compute_hd:
+            row.append(np.nanmean(hd_arr))
         writer.writerow(row)
 
     print('Done.')
