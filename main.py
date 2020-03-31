@@ -120,7 +120,7 @@ if __name__ == '__main__':
                         help='Batch size for training/testing.')
     parser.add_argument('--initial_lr', type=float, default=0.0001,
                         help='Initial learning rate for Adam.')
-    parser.add_argument('--recon_wei', type=float, default=131.072,
+    parser.add_argument('--recon_wei', type=float, default=.1, #131.072,
                         help="If using capsnet: The coefficient (weighting) for the loss of decoder")
     parser.add_argument('--slices', type=int, default=1,
                         help='Number of slices to include for training/testing.')
