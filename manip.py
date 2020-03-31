@@ -13,7 +13,8 @@ Please see the README for further details about how to use this file.
 
 from __future__ import print_function
 
-import os
+from os.path import join
+from os import makedirs
 import SimpleITK as sitk
 from tqdm import tqdm, trange
 from PIL import Image
@@ -46,47 +47,42 @@ def combine_images(generated_images, height=None, width=None):
     return image
 
 
-def manip(args, test_list, manip_model, net_input_shape):
-    if args.net != 'segcapsbasic':
-        out_net_name = args.net + 'r{}r{}'.format(args.r1, args.r2)
+def manip(args, test_list, model_list, net_input_shape):
+    if args.weights_path == '':
+        weights_path = join(args.check_dir, args.output_name + '_model_' + args.time + '.hdf5')
     else:
-        out_net_name = args.net
+        weights_path = join(args.data_root_dir, args.weights_path)
 
-    if args.weights_path != '':
-        manip_out_dir = os.path.join(args.data_root_dir, 'results', out_net_name, 'split_{}'.format(args.split_num),
-                          os.path.basename(args.weights_path)[-24:-5], 'manip_output')
-        try:
-            manip_model.load_weights(args.weights_path)
-        except Exception as e:
-            print(e)
-            raise Exception('Failed to load weights from training.')
-    else:
-        manip_out_dir = os.path.join(args.data_root_dir, 'results', out_net_name, 'split_{}'.format(args.split_num),
-                                     args.time, 'manip_output')
-        try:
-            manip_model.load_weights(os.path.join(args.check_dir, args.output_name + '_model_' + args.time + '.hdf5'))
-        except Exception as e:
-            print(e)
-            raise Exception('Failed to load weights from training.')
-
+    output_dir = join(args.data_root_dir, 'results', args.net, 'split_' + str(args.split_num))
+    manip_out_dir = join(output_dir, 'manip_output')
     try:
-        os.makedirs(manip_out_dir)
+        makedirs(manip_out_dir)
     except:
         pass
 
+    assert(len(model_list) == 3), "Must be using segcaps with the three models."
+    manip_model = model_list[2]
+    try:
+        manip_model.load_weights(weights_path)
+    except:
+        print('Unable to find weights path. Testing with random weights.')
+    print_summary(model=manip_model, positions=[.38, .65, .75, 1.])
+
+
     # Manipulating capsule vectors
-    print('Running Manipulaiton of Capsule Vectors... This will take some time...')
+    print('Testing... This will take some time...')
+
     for i, img in enumerate(tqdm(test_list)):
-        sitk_img = sitk.ReadImage(os.path.join(args.data_root_dir, 'imgs', img[0]))
+        sitk_img = sitk.ReadImage(join(args.data_root_dir, 'imgs', img[0]))
         img_data = sitk.GetArrayFromImage(sitk_img)
         num_slices = img_data.shape[0]
-        sitk_mask = sitk.ReadImage(os.path.join(args.data_root_dir, 'masks', img[0]))
+        sitk_mask = sitk.ReadImage(join(args.data_root_dir, 'masks', img[0]))
         gt_data = sitk.GetArrayFromImage(sitk_mask)
 
         x, y = img_data[num_slices//2, :, :], gt_data[num_slices//2, :, :]
         x, y = np.expand_dims(np.expand_dims(x, -1), 0), np.expand_dims(np.expand_dims(y, -1), 0)
 
-        noise = np.zeros([1, img_data.shape[1], img_data.shape[2], 1, 16])
+        noise = np.zeros([1, 512, 512, 1, 16])
         x_recons = []
         for dim in trange(16):
             for r in [-0.25, -0.125, 0, 0.125, 0.25]:
@@ -102,6 +98,6 @@ def manip(args, test_list, manip_model, net_input_shape):
         out_image[out_image > 574] = 574
         out_image = out_image / 574 * 255
 
-        Image.fromarray(out_image.astype(np.uint8)).save(os.path.join(manip_out_dir, img[0].split('.')[0] + '_manip_output.png'))
+        Image.fromarray(out_image.astype(np.uint8)).save(join(manip_out_dir, img[0][:-4] + '_manip_output.png'))
 
     print('Done.')
